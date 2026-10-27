@@ -1455,6 +1455,18 @@ export interface AutobiographicalConfig {
   /** Model to use for compression (defaults to claude-sonnet) */
   compressionModel?: string;
   /**
+   * Leave the host's system prompt out of L1 and merge requests. By
+   * default they carry `ContextManager.setSystemPrompt`'s value, which is
+   * the LATEST prompt the host set (one value, in memory), not the one in
+   * force when the summarized messages were written: after a prompt change,
+   * older history is summarized under the new prompt. With this on, the
+   * requests carry no system field and identity comes from the head window
+   * and recall pairs alone, as when no prompt is set. Tools are still the
+   * latest ones set. Off by default; changing it changes every request's
+   * hash, so already-quarantined chunks get a fresh attempt.
+   */
+  compressionOmitSystemPrompt?: boolean;
+  /**
    * Hard cap on `max_tokens` for compression requests. The summarizer asks for
    * `max(16000, targetChunkTokens * 1.5)` so folds are not truncated mid-memory,
    * but that floor exceeds what older models will accept as OUTPUT: Claude 3

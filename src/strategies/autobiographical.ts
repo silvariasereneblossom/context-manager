@@ -9577,7 +9577,7 @@ export class AutobiographicalStrategy implements ResettableStrategy {
     // output reserve.
     const priceRequest = (messages: ReadonlyArray<{ content: ContentBlock[] }>): number => {
       let total = outputReserveTokens +
-        (ctx.systemPrompt ? tokensOf([{ type: 'text', text: ctx.systemPrompt }]) : 0) +
+        (this.summarizerSystemPrompt(ctx) ? tokensOf([{ type: 'text', text: this.summarizerSystemPrompt(ctx)! }]) : 0) +
         (ctx.tools && ctx.tools.length > 0 ? tokensOf([{ type: 'text', text: JSON.stringify(ctx.tools) }]) : 0);
       for (const message of messages) total += this.preparedTokensOf(message.content, ctx);
       return total;
@@ -9699,7 +9699,7 @@ export class AutobiographicalStrategy implements ResettableStrategy {
       // assigned: an undeclared prompt must leave the request shape, its
       // canonical hash and its quarantine identity byte-identical to what
       // they were before this field existed.
-      ...(ctx.systemPrompt ? { system: ctx.systemPrompt } : {}),
+      ...(this.summarizerSystemPrompt(ctx) ? { system: this.summarizerSystemPrompt(ctx) } : {}),
       // EXPLICIT image-loss opt-in (2026-07-12): summarizer prompts replay
       // raw history that can carry more inline image bytes than the API's
       // request cap. Dropping the OLDEST images from the summarizer's view is
@@ -9753,7 +9753,7 @@ export class AutobiographicalStrategy implements ResettableStrategy {
       // cache_control before dispatch. The kill switch preserves passthrough.
       this.applyMintCacheSeams(sourceOnlyFallbackWireMessages, [], false);
       sourceOnlyFallbackRequest = {
-        ...(ctx.systemPrompt ? { system: ctx.systemPrompt } : {}),
+        ...(this.summarizerSystemPrompt(ctx) ? { system: this.summarizerSystemPrompt(ctx) } : {}),
         shedOversizeImages: true,
         messages: sourceOnlyFallbackWireMessages,
         config: structuredClone(request.config),
@@ -10913,7 +10913,7 @@ export class AutobiographicalStrategy implements ResettableStrategy {
             const cleaned = stripUnpairedToolBlocks(this.collapseConsecutiveMessages(splitMixedToolMessages(msgs)));
             // runAttempt prepares this request before dispatch and trace hashing.
             return {
-              ...(ctx.systemPrompt ? { system: ctx.systemPrompt } : {}),
+              ...(this.summarizerSystemPrompt(ctx) ? { system: this.summarizerSystemPrompt(ctx) } : {}),
               shedOversizeImages: true,
               messages: cleaned.map((m) => ({ participant: m.participant, content: stripEmptyTextBlocks(m.content) })).filter((m) => m.content.length > 0),
               config: structuredClone(request.config),
@@ -12319,7 +12319,7 @@ export class AutobiographicalStrategy implements ResettableStrategy {
       // assigned: an undeclared prompt must leave the request shape and its
       // request hash byte-identical to what they were before this field
       // existed.
-      ...(ctx.systemPrompt ? { system: ctx.systemPrompt } : {}),
+      ...(this.summarizerSystemPrompt(ctx) ? { system: this.summarizerSystemPrompt(ctx) } : {}),
       // EXPLICIT image-loss opt-in (2026-07-12): summarizer prompts replay
       // raw history that can carry more inline image bytes than the API's
       // request cap. Dropping the OLDEST images from the summarizer's view is
@@ -16828,6 +16828,16 @@ export class AutobiographicalStrategy implements ResettableStrategy {
       ? this.config.witnessedIdentityReminder.trim()
       : this.config.identityReminder?.trim();
     return reminder ? `${instruction}\n\n${reminder}` : instruction;
+  }
+
+  /**
+   * The system prompt an L1 or merge request carries: the host's latest
+   * (ctx.systemPrompt, which ContextManager.setSystemPrompt keeps as one
+   * value in memory, not the one in force when the summarized messages were
+   * written), or none with compressionOmitSystemPrompt.
+   */
+  protected summarizerSystemPrompt(ctx: StrategyContext): string | undefined {
+    return this.config.compressionOmitSystemPrompt === true ? undefined : ctx.systemPrompt;
   }
 
   protected getCompressionInstruction(chunk: Chunk, targetTokens: number): string {

@@ -12,7 +12,8 @@ import type { ContentBlock, Membrane } from '@animalabs/membrane';
 class DiagnosticStrategy extends AutobiographicalStrategy {
   // A host that compresses names its model; a test of one that doesn't passes `compressionModel: undefined`.
   constructor(config: ConstructorParameters<typeof AutobiographicalStrategy>[0] = {}) {
-    super({ compressionModel: 'zz-model', ...config });
+    // A refused chunk stays raw and quarantined (no placeholder), as these tests pin.
+    super({ compressionModel: 'zz-model', compressionRefusalPlaceholder: false, ...config });
   }
 
   level = 1;

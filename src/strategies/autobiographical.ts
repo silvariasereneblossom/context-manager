@@ -422,6 +422,29 @@ function chunkClosedAtMs(messages: readonly unknown[]): number | undefined {
 }
 
 /**
+ * The text of a placeholder L1 (compressionRefusalPlaceholder): how many
+ * messages, and from when to when by their stored times, as minutes in UTC.
+ * Written without a model call, so it says only what the store says.
+ */
+function refusalPlaceholderText(messages: readonly unknown[]): string {
+  const times: number[] = [];
+  for (const message of messages) {
+    const t = (message as { timestamp?: number | Date }).timestamp;
+    const raw = t instanceof Date ? t.getTime() : typeof t === 'number' ? t : undefined;
+    if (raw === undefined || Number.isNaN(raw)) continue;
+    times.push(raw > 1e14 ? raw / 1000 : raw);
+  }
+  const minute = (ms: number): string => `${new Date(ms).toISOString().slice(0, 16).replace('T', ' ')} UTC`;
+  const when = times.length === 0
+    ? ''
+    : ` from ${minute(Math.min(...times))} to ${minute(Math.max(...times))}`;
+  return (
+    `(A stretch I couldn't form a memory of: ${messages.length} message${messages.length === 1 ? '' : 's'}${when} ` +
+    `could not be summarized, so this note stands in for the memory. The original messages remain in the archive.)`
+  );
+}
+
+/**
  * The sources an L1 run's failures were about: the chunk's message ids and
  * their content. A source edited in place keeps its id but is a different
  * request, so its failures start a run of their own.
@@ -5019,6 +5042,7 @@ export class AutobiographicalStrategy implements ResettableStrategy {
             records: 0,
             answeredAttempts: 0,
             latestOutcome: null,
+            ...(chunk?.compressed && this.isPlaceholderSummary(chunk.summaryId) ? { placeholderSummaryId: chunk.summaryId } : {}),
           };
           spans.set(hash, span);
         }
@@ -5316,11 +5340,19 @@ export class AutobiographicalStrategy implements ResettableStrategy {
     const spans = status.spans.map((span) =>
       `${span.firstMessageId ?? '?'}..${span.lastMessageId ?? '?'} (${age(span.closedAgeMs)}, ${since(span.quarantinedAt)}, ` +
         `${span.records} record${span.records === 1 ? '' : 's'}, ${span.answeredAttempts} answered` +
-        `${span.latestOutcome ? `, last ${span.latestOutcome}` : ''})`,
+        `${span.latestOutcome ? `, last ${span.latestOutcome}` : ''}` +
+        `${span.placeholderSummaryId ? `, placeholder ${span.placeholderSummaryId}` : ''})`,
     );
+    const placeheld = status.spans.filter((span) => span.placeholderSummaryId !== undefined).length;
+    const consequence = placeheld === 0
+      ? 'their spans stay raw and WILL eventually exhaust the context budget'
+      : placeheld === status.spans.length
+        ? 'each is covered by a placeholder summary: the agent has no memory of it, and its messages stay in the store'
+        : `${placeheld} covered by a placeholder summary (no memory of them; their messages stay in the store), ` +
+          'the others raw, which WILL eventually exhaust the context budget';
     this.diag.error(
       `[compression-quarantine] ⚠️ ${status.spans.length} span(s) in compression quarantine ` +
-        `(${status.count} record(s)) — their spans stay raw and WILL eventually exhaust the context budget. ` +
+        `(${status.count} record(s)) — ${consequence}. ` +
         `Operator action required (inspect refusing content; branch, pin, or clear). ` +
         `spans: ${spans.join('; ')}. keys=${status.keys.map(k => k.slice(0, 12)).join(',')}`,
     );
@@ -5369,6 +5401,8 @@ export class AutobiographicalStrategy implements ResettableStrategy {
       for (const [key, active] of projection) {
         const match = byHash.get(active.record.chunkSourceHash);
         if (match && !match.compressed) continue; // live debt — keep, klaxon
+        // Covered by a placeholder, not a memory: keep, klaxon.
+        if (match && this.isPlaceholderSummary(match.summaryId)) continue;
         const reason = match
           ? `span already compressed (${match.summaryId ?? 'summary'})`
           : 'orphaned by chunk-boundary drift (no matching chunk record)';
@@ -5462,6 +5496,65 @@ export class AutobiographicalStrategy implements ResettableStrategy {
   }
 
   /**
+   * Cover a chunk whose compression ended without a summary, its family's
+   * quarantine record in the ledger, with a placeholder L1 written without a
+   * model call (compressionRefusalPlaceholder), so compression goes on past
+   * it and the budget recovers. The quarantine record stays: the paid-off
+   * sweep and the success-clear leave a span a placeholder covers, so the
+   * alarm keeps naming it until an operator clears it. Returns whether it
+   * wrote one: not with the option off, on a branch that moved, for a chunk
+   * already compressed, held, or covered in part by an L1 written meanwhile.
+   */
+  private async writeRefusalPlaceholder(
+    chunk: Chunk,
+    ctx: StrategyContext,
+    sourceBranch: CompressionOperationBranch,
+  ): Promise<boolean> {
+    if (this.config.compressionRefusalPlaceholder === false) return false;
+    if (!this.isCompressionBranchCurrent(sourceBranch)) return false;
+    if (chunk.compressed || chunk.messages.length === 0) return false;
+    if (this.chunkHasHeldMessage(chunk, this.holdBlockedIds(ctx.messageStore))) return false;
+    const ids = new Set(chunk.messages.map((message) => message.id));
+    if (this.summaries.some((s) => s.level === 1 && Array.isArray(s.sourceIds) && s.sourceIds.some((id) => ids.has(id)))) return false;
+    const messageIds = chunk.messages.map((message) => message.id);
+    const content = refusalPlaceholderText(chunk.messages);
+    const entry: SummaryEntry = {
+      id: `L1-${this.nextSummaryIdCounter()}`,
+      level: 1,
+      content,
+      tokens: Math.ceil(content.length / 3),
+      sourceLevel: 0,
+      sourceIds: messageIds,
+      sourceRange: { first: messageIds[0], last: messageIds[messageIds.length - 1] },
+      created: Date.now(),
+      phaseType: chunk.phaseType,
+      ...(this.chunkIsWitnessed(chunk) ? { witnessed: true } : {}),
+      placeholder: 'compression-exhausted',
+    };
+    this.pushSummary(entry);
+    chunk.compressed = true;
+    chunk.summaryId = entry.id;
+    this.markChunkRecordCompressed(chunk.recordId, entry.id);
+    this._compressionCount++;
+    this.diag.error(
+      `[autobiographical] compression of the chunk of ${messageIds.length} message(s) from ${messageIds[0]} ended without a summary; ` +
+        `covered by placeholder ${entry.id}, written without a model call (the messages stay in the store; the quarantine record stays until cleared)`,
+    );
+    logCompressionCall({
+      event: 'compression:placeholder',
+      operation: 'compress_l1',
+      metadata: { chunk_message_ids: messageIds, summary_id: entry.id },
+    }, this.ns);
+    this.checkMergeThreshold();
+    return true;
+  }
+
+  /** Whether a summary id names a placeholder (compressionRefusalPlaceholder). */
+  private isPlaceholderSummary(id: string | undefined): boolean {
+    return id !== undefined && this.summaries.some((s) => s.id === id && s.placeholder !== undefined);
+  }
+
+  /**
    * A successful compression (or adoption of an existing exact L1) pays off
    * any quarantine debt recorded against the same chunk under earlier
    * request shapes — e.g. a chunk quarantined on text-only requests that
@@ -5480,6 +5573,8 @@ export class AutobiographicalStrategy implements ResettableStrategy {
     } catch (error) {
       this.diag.warn(`[autobiographical] could not drop compression progress for a compressed chunk: ${describeCompressionFailure(error)}`);
     }
+    // A placeholder pays off nothing: its records stay, for the operator.
+    if (this.isPlaceholderSummary(chunk.summaryId)) return;
     try {
       const hash = chunkHash;
       const projection = this.readCompressionQuarantineProjection();
@@ -7298,11 +7393,12 @@ export class AutobiographicalStrategy implements ResettableStrategy {
   async tick(ctx: StrategyContext): Promise<void> {
     const sourceBranch = this.requireLoadedBranch('tick');
     phaseChannel.report('compress-tick'); // liveness-watchdog phase
-    // Quarantine is deferred debt, never a resting state: every quarantined
-    // chunk keeps its span raw, the fold floor creeps, and the picker
-    // eventually cannot fit the window — a guaranteed future outage. Sound
-    // the alarm on every interval for as long as ANY chunk is quarantined
-    // (after sweeping records whose debt is already paid).
+    // Quarantine is deferred debt, never a resting state: a quarantined chunk
+    // left raw keeps its span raw, the fold floor creeps, and the picker
+    // eventually cannot fit the window — a guaranteed future outage; one a
+    // placeholder covers (compressionRefusalPlaceholder) is a memory the agent
+    // doesn't have. Sound the alarm on every interval for as long as ANY
+    // chunk is quarantined (after sweeping records whose debt is already paid).
     await this.soundQuarantineAlarmIfNeeded();
     // Detached, or the branch moved, during the sweep: nothing more to do.
     if (!this.isCompressionBranchCurrent(sourceBranch)) return;
@@ -9710,6 +9806,9 @@ export class AutobiographicalStrategy implements ResettableStrategy {
     const durableActive = this.durableQuarantineFor(durableQuarantine, quarantineRecord);
     if (durableActive) {
       this.compressionRefusalQuarantine = durableQuarantine;
+      // Quarantined before (by an earlier process, or before placeholders
+      // were on): covered now, with no call, as an exhaustion is.
+      if (await this.writeRefusalPlaceholder(chunk, ctx, sourceBranch)) return;
       if (!this.warnedQuarantineSkips.has(quarantineRecord.chunkSourceHash)) {
         this.warnedQuarantineSkips.add(quarantineRecord.chunkSourceHash);
         this.diag.warn(
@@ -11083,6 +11182,9 @@ export class AutobiographicalStrategy implements ResettableStrategy {
           const exhaustion = await this.exhaustCompressionRequestFamily(sourceBranch, quarantineRecord, familyRecord, familyOpen);
           if (!this.isCompressionBranchCurrent(sourceBranch)) return;
           settleExhaustion(exhaustion);
+          // The ledger holds the family's record: the chunk won't be asked
+          // for again, so a placeholder covers it (the record stays).
+          if (exhaustion === 'written' || exhaustion === 'held') await this.writeRefusalPlaceholder(chunk, ctx, sourceBranch);
           return;
         }
       }
@@ -11203,7 +11305,10 @@ export class AutobiographicalStrategy implements ResettableStrategy {
               ];
           for (const outcome of ended) noteOutcome(outcome);
           const exhaustion = await this.exhaustCompressionRequestFamily(sourceBranch, quarantineRecord, familyRecord, familyOpen);
-          if (this.isCompressionBranchCurrent(sourceBranch)) settleExhaustion(exhaustion);
+          if (this.isCompressionBranchCurrent(sourceBranch)) {
+            settleExhaustion(exhaustion);
+            if (exhaustion === 'written' || exhaustion === 'held') await this.writeRefusalPlaceholder(chunk, ctx, sourceBranch);
+          }
         }
         return;
       }

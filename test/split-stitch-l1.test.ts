@@ -68,6 +68,10 @@ function cumulativeMembrane(opts: { refuseAt: number; alwaysRefuse?: string; thr
 }
 
 class ProbeStrategy extends AutobiographicalStrategy {
+  // A refused chunk stays raw and quarantined here (compressionRefusalPlaceholder off): these tests pin that path.
+  constructor(config: ConstructorParameters<typeof AutobiographicalStrategy>[0] = {}) {
+    super({ compressionRefusalPlaceholder: false, ...config });
+  }
   run(chunk: Chunk, ctx: StrategyContext): Promise<void> { return this.compressChunkHierarchical(chunk, ctx); }
   details() { return (this as unknown as { lastSplitDetails?: { usage: Record<string, unknown>; model: { actual: string; provider: string }; cache: { tokensCreated: number; tokensRead: number; hitRatio: number } } }).lastSplitDetails; }
   attempted() { return (this as unknown as { lastSplitAttempted?: { calls: number; refused: number; errors: number; inputTokens: number; outputTokens: number; cacheCreationTokens?: number; cacheReadTokens?: number; complete: boolean } }).lastSplitAttempted; }

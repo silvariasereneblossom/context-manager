@@ -1137,6 +1137,12 @@ export interface CompressionQuarantineSpan {
    * failures decided); null when that record holds none.
    */
   latestOutcome: string | null;
+  /**
+   * The placeholder summary covering the span (`compressionRefusalPlaceholder`),
+   * when one does: the span is then no longer raw, but the agent has no
+   * memory of it.
+   */
+  placeholderSummaryId?: string;
 }
 
 /** Delimiter convention applied to recall answer content. See `recallEnvelope`. */
@@ -1225,9 +1231,11 @@ export interface KvUnifiedConfig {
 export interface AutobiographicalConfig {
   /**
    * Interval for the repeating compression-quarantine alarm (stderr +
-   * registered handler) while ANY chunk is quarantined. Quarantined chunks
-   * are a guaranteed eventual outage — the alarm repeats until the
-   * quarantine empties. Default 15 min; 0 disables (tests only).
+   * registered handler) while ANY chunk is quarantined. A quarantined chunk
+   * left raw is a guaranteed eventual outage; one covered by a placeholder
+   * (`compressionRefusalPlaceholder`) is a memory the agent doesn't have.
+   * Either way the alarm repeats until the quarantine empties. Default 15
+   * min; 0 disables (tests only).
    */
   quarantineAlarmIntervalMs?: number;
   /** Target tokens per chunk (~3000) */
@@ -1916,6 +1924,22 @@ export interface AutobiographicalConfig {
    * the record). Without it, such a chunk falls through to quarantine. Off by default.
    */
   compressionSplitPlaceholder?: boolean;
+  /**
+   * When a chunk's compression ends without a summary after every rung of
+   * its ladder (refused, incomplete or empty each time), cover it with a
+   * placeholder L1 written without a model call instead of leaving it raw:
+   * a short note, in the agent's voice, that this many messages from this
+   * time range couldn't be summarized and that the messages remain in the
+   * archive. Compression then goes on past the chunk and the budget
+   * recovers, where a raw quarantined chunk stays in every compile until an
+   * operator clears it. A chunk quarantined before this was on is covered at
+   * its next attempt. The quarantine record and its alarm stay, for the
+   * operator, until cleared (`clearCompressionRefusalQuarantine`); clearing
+   * it leaves the placeholder, which is permanent: the span isn't asked for
+   * again. The entry is marked `placeholder`. On unless set to `false`, which
+   * leaves such a chunk raw and quarantined, as before.
+   */
+  compressionRefusalPlaceholder?: boolean;
   /** Split-stitch: max sub-calls per chunk (default 40). */
   compressionSplitMaxCallsPerChunk?: number;
   /** Split-stitch: max sub-calls per strategy instance per 10-minute sliding window (default 80).
@@ -2246,6 +2270,13 @@ export interface SummaryEntry {
   id: string;
   /** Present when the entry was produced by the split-stitch rung (compressionSplitFallback). */
   stitched?: Record<string, unknown>;
+  /**
+   * Present when the entry is a placeholder written without a model call
+   * (`compressionRefusalPlaceholder`): every compression attempt for its
+   * chunk ended without a summary, and its content only says so. Its
+   * messages stay in the store.
+   */
+  placeholder?: 'compression-exhausted';
   /** Compression level (1, 2, 3, ... — unbounded in the adaptive-resolution design) */
   level: SummaryLevel;
   /** The summary text */

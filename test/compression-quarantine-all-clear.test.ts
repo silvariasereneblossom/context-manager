@@ -28,6 +28,8 @@ const CONFIG = {
   compressionModel: 'same-model', targetChunkTokens: 100, recentWindowTokens: 0, headWindowTokens: 0,
   autoTickOnNewMessage: false, minChunkCharsForLLM: 0, mergeThreshold: 99, compressionRefusalCurveFallbacks: 0,
   quarantineAlarmIntervalMs: INTERVAL,
+  // A refused chunk stays raw and quarantined (no placeholder), as these tests pin.
+  compressionRefusalPlaceholder: false,
 };
 
 class ProbeStrategy extends AutobiographicalStrategy {

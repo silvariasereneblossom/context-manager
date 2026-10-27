@@ -90,6 +90,10 @@ function observeInFlightJoins(): { count: () => number; restore: () => void } {
 interface RawPause { backoffUntil: number; statedUntil: number | null; statedBy: 'provider' | 'admission' | null; failures: number; model: string | undefined; reason: string }
 
 class ProbeStrategy extends AutobiographicalStrategy {
+  // A refused chunk stays raw and quarantined here (compressionRefusalPlaceholder off): these tests pin that path.
+  constructor(config: ConstructorParameters<typeof AutobiographicalStrategy>[0] = {}) {
+    super({ compressionRefusalPlaceholder: false, ...config });
+  }
   seed(entry: SummaryEntry): void { this.pushSummary(entry); }
   run(chunk: Chunk, ctx: StrategyContext): Promise<void> { return this.compressChunkHierarchical(chunk, ctx); }
   summariesView(): SummaryEntry[] { return [...this.summaries]; }

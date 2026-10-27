@@ -194,7 +194,15 @@ recorded, and the family stays open.
 
 When a family exhausts:
 
-- leave the chunk raw;
+- cover the chunk with a placeholder L1 written without a model call, saying
+  how many messages from what time range couldn't be summarized and that the
+  messages remain in the archive (`compressionRefusalPlaceholder`, on unless
+  set to `false`; the entry is marked `placeholder`). With it off, leave the
+  chunk raw. A chunk quarantined before it was on is covered at its next
+  attempt, with no call. The record below stays either way: the paid-off
+  sweep and the success-clear leave a span a placeholder covers, so the
+  alarm keeps naming it until an operator clears it, and a clear leaves the
+  placeholder, so the span isn't asked for again;
 - do not store an empty summary;
 - write a durable failure record keyed by:
   - model;

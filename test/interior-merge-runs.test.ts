@@ -899,7 +899,7 @@ describe('a stray beside a refused chunk, in a live store', () => {
     const strategy = new Lane({
       adaptiveResolution: true, speculativeProduction: true, mergeThreshold: 3, headWindowTokens: 0, recentWindowTokens: 200,
       targetChunkTokens: 60, l1HoldbackChunks: 0, autoTickOnNewMessage: false, compressionModel: 'mock', minChunkCharsForLLM: 0,
-      compressionRefusalCurveFallbacks: 0,
+      compressionRefusalCurveFallbacks: 0, compressionRefusalPlaceholder: false,
     } as never);
     const manager = await ContextManager.open({ path: STORE, strategy, membrane: accepting as never });
     try {

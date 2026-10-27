@@ -40,6 +40,10 @@ function capturingMembrane(stopReason: 'end_turn' | 'refusal' = 'end_turn') {
 }
 
 class ProbeStrategy extends AutobiographicalStrategy {
+  // A refused chunk stays raw and quarantined here (compressionRefusalPlaceholder off): these tests pin that path.
+  constructor(config: ConstructorParameters<typeof AutobiographicalStrategy>[0] = {}) {
+    super({ compressionRefusalPlaceholder: false, ...config });
+  }
   seed(entry: SummaryEntry): void { this.pushSummary(entry); }
   run(chunk: Chunk, ctx: StrategyContext): Promise<void> { return this.compressChunkHierarchical(chunk, ctx); }
   runMerge(level: number, sourceIds: string[], ctx: StrategyContext): Promise<void> {

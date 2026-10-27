@@ -536,6 +536,20 @@ const COMPRESSION_MARKER =
   'about to compress. After them, write the memory in your own voice.';
 
 /**
+ * The attribution rule an L1 or merge instruction ends with
+ * (`compressionAttribution`): summaries are replayed in the agent's own
+ * voice, so a claim another participant made, or a tool result or fetched
+ * page carried, must stay theirs in the memory rather than become something
+ * the agent knows first-hand. `compressionMergeSourceOnly` merges keep their
+ * own, older wording of it.
+ */
+const ATTRIBUTION_DISCIPLINE =
+  'Attribution discipline: preserve who made each claim. Write what another participant said, or what a ' +
+  'tool result or a page you read reported, as theirs ("they told me…", "the page claimed…"), not as your ' +
+  'own first-person knowledge, unless the source includes your own direct confirmation. Preserve ' +
+  'corrections and uncertainty explicitly.';
+
+/**
  * The interstitial text between two summaries in the legacy combined recall
  * answer (`positionedRecallPairs: false`). Hoisted out of
  * `renderCombinedRecallAnswer` because the shared-budget path must PRICE it
@@ -9419,9 +9433,13 @@ export class AutobiographicalStrategy implements ResettableStrategy {
     // Worked out here, before the layout, since admitting pins prices it.
     const docContext = this.detectDocContext(chunk, ctx);
     const instructionText = this.applyIdentityReminder(
-      docContext
-        ? this.getReadingChunkInstruction(chunk, docContext.totalTokens, targetTokens)
-        : this.getCompressionInstruction(chunk, targetTokens),
+      this.withAttributionNote(
+        docContext
+          ? this.getReadingChunkInstruction(chunk, docContext.totalTokens, targetTokens)
+          : this.getCompressionInstruction(chunk, targetTokens),
+        chunk,
+        chunk.messages,
+      ),
       this.chunkIsWitnessed(chunk),
     );
     // Generous output ceiling so a memory-write is never truncated mid-thought:
@@ -10908,7 +10926,7 @@ export class AutobiographicalStrategy implements ResettableStrategy {
             const msgs = [
               { participant: 'Context Manager', content: [{ type: 'text', text: COMPRESSION_MARKER }] as ContentBlock[] },
               ...subset.map((m) => ({ participant: m.participant, content: compressionInputContent(m.content) })),
-              { participant: 'Context Manager', content: [{ type: 'text', text: this.applyIdentityReminder(this.getCompressionInstruction(chunk, target), this.chunkIsWitnessed(chunk)) }] as ContentBlock[] },
+              { participant: 'Context Manager', content: [{ type: 'text', text: this.applyIdentityReminder(this.withAttributionNote(this.getCompressionInstruction(chunk, target), chunk, subset), this.chunkIsWitnessed(chunk)) }] as ContentBlock[] },
             ];
             const cleaned = stripUnpairedToolBlocks(this.collapseConsecutiveMessages(splitMixedToolMessages(msgs)));
             // runAttempt prepares this request before dispatch and trace hashing.
@@ -12208,7 +12226,7 @@ export class AutobiographicalStrategy implements ResettableStrategy {
       if (body) mergeReadingContext = { totalTokens: body.totalTokens };
     }
     let mergeInstructionText = this.applyIdentityReminder(
-      refusalFallback
+      (refusalFallback
         ? // Fallback payload shows the sources THEMSELVES, so the "content
           // one level deeper" description the standard getters derive would
           // be wrong — call the formatters with the sources' own level.
@@ -12224,7 +12242,14 @@ export class AutobiographicalStrategy implements ResettableStrategy {
               mergeReadingContext.totalTokens,
               targetTokens,
             )
-          : this.getMergeInstruction(targetLevel, sources, targetTokens),
+          : this.getMergeInstruction(targetLevel, sources, targetTokens)) +
+        // The attribution rule (compressionAttribution), ahead of the
+        // reminder, which ends the instruction. A wholly witnessed merge's
+        // instruction already attributes everything, and a source-only
+        // merge adds its own wording below.
+        (!mergeSourceOnly && this.config.compressionAttribution !== false && !sources.every((s) => s.witnessed)
+          ? `\n\n${ATTRIBUTION_DISCIPLINE}`
+          : ''),
       // Only a merge whose every source is witnessed takes the witnessed
       // reminder. A mixed merge takes the live instruction and reminder, and
       // its request shows inherited and lived material together, with no
@@ -16828,6 +16853,40 @@ export class AutobiographicalStrategy implements ResettableStrategy {
       ? this.config.witnessedIdentityReminder.trim()
       : this.config.identityReminder?.trim();
     return reminder ? `${instruction}\n\n${reminder}` : instruction;
+  }
+
+  /**
+   * An L1 instruction with its attribution note (`compressionAttribution`,
+   * on unless set to false): where the summarized messages' content came
+   * from besides the agent, read from the store's own fields (the other
+   * participants, and the tools whose calls or results they hold), then
+   * ATTRIBUTION_DISCIPLINE. The messages go to the summarizer as they are;
+   * the note names their sources after them, where the instruction is. Left
+   * off for a witnessed chunk, whose instruction already attributes
+   * everything, and for messages that are all the agent's own with no tool
+   * in them.
+   */
+  protected withAttributionNote(instruction: string, chunk: Chunk, messages: readonly StoredMessage[]): string {
+    if (this.config.compressionAttribution === false || this.chunkIsWitnessed(chunk)) return instruction;
+    const agent = this.config.summaryParticipant ?? 'Claude';
+    const others = new Set<string>();
+    const tools = new Set<string>();
+    let toolResults = false;
+    for (const message of messages) {
+      if (message.participant !== agent && message.participant !== 'Context Manager') others.add(message.participant);
+      for (const block of message.content) {
+        if (block.type === 'tool_use') tools.add(block.name);
+        else if (block.type === 'tool_result') toolResults = true;
+      }
+    }
+    const list = (names: string[]): string =>
+      names.length <= 1 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
+    const sources: string[] = [];
+    if (others.size > 0) sources.push(`messages from ${list([...others])}`);
+    if (tools.size > 0) sources.push(`calls to and results from the tool${tools.size === 1 ? '' : 's'} ${list([...tools])}`);
+    else if (toolResults) sources.push('tool results');
+    if (sources.length === 0) return instruction;
+    return `${instruction}\n\nWhere this slice's content came from, besides you: ${sources.join('; ')}. ${ATTRIBUTION_DISCIPLINE}`;
   }
 
   /**

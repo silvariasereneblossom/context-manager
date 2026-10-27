@@ -1467,6 +1467,20 @@ export interface AutobiographicalConfig {
    */
   compressionOmitSystemPrompt?: boolean;
   /**
+   * Keep who said what in summaries, which are replayed in the agent's own
+   * voice. An L1 instruction ends by naming where the summarized messages'
+   * content came from besides the agent, read from the store's fields (the
+   * other participants, and the tools whose calls or results they hold),
+   * and asks that what another participant said, or a tool result or page
+   * reported, be written as theirs rather than as the agent's own
+   * knowledge. A merge instruction ends with the same request. The messages
+   * themselves go to the summarizer unchanged, and stored summaries are
+   * untouched. Witnessed chunks (`witnessedBeforeSequence`) keep their own
+   * instruction, and `compressionMergeSourceOnly` merges their own wording.
+   * On unless set to `false`, which restores the instructions as they were.
+   */
+  compressionAttribution?: boolean;
+  /**
    * Hard cap on `max_tokens` for compression requests. The summarizer asks for
    * `max(16000, targetChunkTokens * 1.5)` so folds are not truncated mid-memory,
    * but that floor exceeds what older models will accept as OUTPUT: Claude 3

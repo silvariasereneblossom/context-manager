@@ -182,6 +182,21 @@ interface ContextManagerBaseConfig {
    * `viewFilter`, when also set, applies to the merged view.
    */
   auxiliaryMessageViews?: Array<{ namespace?: string }>;
+  /**
+   * When true, `compile` and `previewContext` take the request's overhead
+   * out of the budget before the strategy fits messages into it: the
+   * estimated tokens (the store's estimator, as compression requests price
+   * the same parts) of the system prompt given to `setSystemPrompt`, the tool
+   * definitions given to `setToolDefinitions`, and the compile's injections
+   * at every position. `maxTokens` is then the whole request, the response
+   * included, so far as the manager knows its parts: a system prompt or
+   * tools the host sends without setting them here aren't counted.
+   *
+   * Off by default, so a budget covers the messages a compile sends and
+   * `reserveForResponse` only: turning it on shrinks every tool-heavy
+   * agent's window, which a host should choose (context-manager#323).
+   */
+  reserveRequestOverhead?: boolean;
 }
 
 /**
@@ -303,6 +318,8 @@ export class ContextManager {
   /** heldAt / expiresAt per held id (expiresAt absent = no timeout). */
   private compressionHoldInfo = new Map<MessageId, CompressionHoldInfo>();
   private now: () => number = Date.now;
+  /** See ContextManagerBaseConfig.reserveRequestOverhead. */
+  private reserveRequestOverhead = false;
   /** Hold options + shared heldAt for the addMessage currently appending. */
   private holdingAddOptions: CompressionHoldOptions | undefined;
   private holdingAddAt = 0;
@@ -529,6 +546,7 @@ export class ContextManager {
       auxiliaryStores,
     );
     if (config.now) manager.now = config.now;
+    manager.reserveRequestOverhead = config.reserveRequestOverhead === true;
 
     try {
       await manager.initializeStrategy();
@@ -1239,7 +1257,7 @@ export class ContextManager {
     const entries = this.strategy.select(
       view,
       this.contextLog.createView(),
-      effectiveBudget,
+      this.messageBudget(effectiveBudget, view, injections),
       opts
     );
     const selectionCause = this.strategy.takeSelectionCause?.();
@@ -1972,10 +1990,11 @@ export class ContextManager {
     };
     if (typeof s.previewContext !== 'function') return null;
     try {
+      const view = this.strategyMessageView();
       return s.previewContext(
-        this.strategyMessageView(),
+        view,
         this.contextLog.createView(),
-        budget,
+        this.messageBudget(budget, view),
         overrides,
         opts,
       );
@@ -2335,6 +2354,26 @@ export class ContextManager {
    */
   setSystemPrompt(text: string | undefined): void {
     if (text && text.length > 0) this.systemPrompt = text;
+  }
+
+  /**
+   * The budget the strategy fits messages into: `budget` as given, or with
+   * `reserveRequestOverhead`, `maxTokens` less the request's overhead (see
+   * that option), priced by the view's estimator. Never below
+   * `reserveForResponse`, so an overhead past the budget leaves the messages
+   * no room rather than a negative one.
+   */
+  private messageBudget(budget: TokenBudget, view: MessageStoreView, injections?: ContextInjection[]): TokenBudget {
+    if (!this.reserveRequestOverhead) return budget;
+    const price = (content: ContentBlock[]): number => view.estimateTokens({ content } as unknown as StoredMessage);
+    let overhead = 0;
+    if (this.systemPrompt) overhead += price([{ type: 'text', text: this.systemPrompt }]);
+    if (this.toolDefinitions && this.toolDefinitions.length > 0) {
+      overhead += price([{ type: 'text', text: JSON.stringify(this.toolDefinitions) }]);
+    }
+    for (const injection of injections ?? []) overhead += price(injection.content);
+    if (overhead === 0) return budget;
+    return { ...budget, maxTokens: Math.max(budget.reserveForResponse, budget.maxTokens - overhead) };
   }
 
   private createStrategyContext(): StrategyContext {

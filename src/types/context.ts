@@ -78,7 +78,13 @@ export interface ContextEntryInternal {
  * Token budget for context compilation.
  */
 export interface TokenBudget {
-  /** Total token window, including reserveForResponse. Strategies target maxTokens - reserveForResponse input tokens. */
+  /**
+   * Total token window, including reserveForResponse. Strategies target
+   * maxTokens - reserveForResponse tokens of messages. The system prompt,
+   * tool definitions and injections come on top of that, unless the manager
+   * was opened with `reserveRequestOverhead`, which takes their estimate out
+   * of maxTokens first.
+   */
   maxTokens: number;
   /** Response tokens withheld from maxTokens before fitting the input context. */
   reserveForResponse: number;

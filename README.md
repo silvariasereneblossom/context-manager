@@ -27,7 +27,7 @@ manager.addMessage('User', [{ type: 'text', text: 'Hello!' }]);
 manager.addMessage('Claude', [{ type: 'text', text: 'Hi. What are we working on?' }]);
 
 const { messages, systemInjections } = await manager.compile({
-  maxTokens: 100_000, // the whole window, the response included
+  maxTokens: 100_000, // the messages' window, the response included (see below)
   reserveForResponse: 4_000,
 });
 // `messages` go into a membrane request. Injections you pass to compile() as
@@ -36,6 +36,8 @@ const { messages, systemInjections } = await manager.compile({
 
 manager.close();
 ```
+
+`maxTokens` bounds the messages a compile sends plus `reserveForResponse`. Your system prompt, tool definitions and injections come on top of it. To make `maxTokens` the whole request, open the manager with `reserveRequestOverhead: true`: compile then takes out the estimated tokens of the system prompt and tools you give `setSystemPrompt` and `setToolDefinitions` and of the compile's injections, and the strategy fits the messages into what's left. It's off by default because it shrinks the window of an agent with many tools. The autobiographical strategy can go over the messages' share by `overBudgetGraceRatio` (2%) rather than drop history, so leave a little headroom below the model's window.
 
 To use a store your application already holds, pass it as `store` (a Chronicle `JsStore`) instead of `path`. Your application then closes it. Several managers can share one store. `namespace` gives each its own context log and strategy state, summaries included, and `isolate: true` with a `namespace` gives it its own messages too.
 

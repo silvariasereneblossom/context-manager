@@ -16547,8 +16547,19 @@ export class AutobiographicalStrategy implements ResettableStrategy {
           | { kind: 'pin'; position: number; msg: StoredMessage };
 
         const items: Item[] = [];
+        // A summary sits at its first message still in the view
+        // (summaryStartInStore), as compression and merge requests place it:
+        // a host can remove the message its range starts at, and placing the
+        // summary last then rendered an old memory as the newest (#321). One
+        // with no message left has no known place and stays last.
+        let summariesById: Map<string, SummaryEntry> | undefined;
         for (const s of selectedSummaries) {
-          const pos = positionOf.get(s.sourceRange.first) ?? Number.MAX_SAFE_INTEGER;
+          let pos = positionOf.get(s.sourceRange.first);
+          if (pos === undefined) {
+            summariesById ??= new Map(this.summaries.map((entry) => [entry.id, entry]));
+            const start = this.summaryStartInStore(s, positionOf, summariesById);
+            pos = start >= 0 ? start : Number.MAX_SAFE_INTEGER;
+          }
           items.push({ kind: 'summary', position: pos, summary: s });
         }
         for (const p of middleRaw) {

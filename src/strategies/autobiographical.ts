@@ -7869,6 +7869,7 @@ export class AutobiographicalStrategy implements ResettableStrategy {
     // written, an earlier select's must not pose as this one's.
     this._lastSelectStats = null;
     this.requireLoadedBranch('select');
+    if (opts?.dryRun !== true) this.warnWindowsOverBudget(budget);
     this._selectStartedAt = performance.now();
     this._selectMessages = store.length();
     const lastRenderStats = this._lastRenderStats;
@@ -7944,6 +7945,36 @@ export class AutobiographicalStrategy implements ResettableStrategy {
       restore();
       this.thinkingBound = false;
     }
+  }
+
+  /**
+   * Warn, once for each budget and window sizes, when a committing select's
+   * budget can't hold the raw windows configured beside it. The head window
+   * and the recent window stay raw whatever compression does, so once the
+   * conversation outgrows them every compile at this budget is refused, turn
+   * after turn (the hierarchical path's recent window with UncoveredDropError,
+   * the adaptive one with OverBudgetError naming a smaller recent window).
+   * This says so at the first compile, while the store may still be small
+   * enough that compiles succeed, naming both windows and the budget. It
+   * doesn't refuse: a short conversation fits such a budget, and the refusal
+   * when the windows do bind keeps its own diagnostics. Not with
+   * enforceBudget off, which never refuses over the budget.
+   */
+  private warnWindowsOverBudget(budget: TokenBudget): void {
+    if (this.config.enforceBudget === false) return;
+    const inputBudget = budget.maxTokens - budget.reserveForResponse;
+    const head = Math.max(0, this.config.headWindowTokens || 0);
+    const tail = Math.max(0, this.config.recentWindowTokens || 0);
+    if (head + tail <= inputBudget) return;
+    const key = `${head}+${tail}>${inputBudget}`;
+    if (this._windowsOverBudgetWarned === key) return;
+    this._windowsOverBudgetWarned = key;
+    this.diag.error(
+      `[autobiographical] configuration error: recentWindowTokens (${tail}) and headWindowTokens (${head}) stay raw ` +
+        `and don't fit this compile's input budget of ${inputBudget} (maxTokens ${budget.maxTokens} less ` +
+        `reserveForResponse ${budget.reserveForResponse}), so once the conversation outgrows them every compile ` +
+        'at this budget will be refused; lower recentWindowTokens or headWindowTokens, or raise the budget',
+    );
   }
 
   private selectPath(store: MessageStoreView, budget: TokenBudget, opts?: SelectOptions): ContextEntry[] {
@@ -8731,6 +8762,8 @@ export class AutobiographicalStrategy implements ResettableStrategy {
   /** `performance.now()` at the top of the current `select()`; rsEnd() stamps
    *  the base `select()`'s elapsed time on the plan-vs-actual line from it. */
   private _selectStartedAt = 0;
+  /** The windows-over-budget warning last given (warnWindowsOverBudget), so each is given once. */
+  private _windowsOverBudgetWarned: string | null = null;
   /** Length of the strategy's view of the branch at the top of `select()`,
    *  whichever chunker runs; rsEnd() logs it as `messages=`. */
   private _selectMessages = 0;

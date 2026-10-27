@@ -1246,16 +1246,28 @@ export interface AutobiographicalConfig {
    *  Messages within this window are never chunked or compressed — they survive
    *  as raw copies so initial instructions retain full granularity. */
   headWindowTokens: number;
-  /** Always break at message boundaries */
+  /**
+   * @deprecated Ignored: nothing reads it. Chunks always break at message
+   * boundaries, whatever it's set to.
+   */
   chunkOnMessageBoundary: boolean;
   /** Don't count attachment tokens toward chunk size */
   attachmentsIgnoreSize: boolean;
   /** When true, onNewMessage() fires tick() as a background promise so compression
    *  runs automatically without the framework calling tick() explicitly. */
   autoTickOnNewMessage: boolean;
-  /** System prompt for summarization */
+  /**
+   * @deprecated Ignored: no request reads it, and the default here is never
+   * sent. An L1 request carries the host's system prompt
+   * (`ContextManager.setSystemPrompt`), or none; see `compressionOmitSystemPrompt`.
+   */
   summarySystemPrompt?: string;
-  /** User prompt template for summarization. Use {content} for the transcript. */
+  /**
+   * @deprecated Ignored: no request reads it, and the default here is never
+   * sent. The L1 instruction is the strategy's own (`getCompressionInstruction`,
+   * which a subclass can override), or `witnessedInstruction` for witnessed
+   * chunks.
+   */
   summaryUserPrompt?: string;
   /**
    * As-of perspective pin for inherited history (e.g. a resident continued
@@ -1702,9 +1714,9 @@ export interface AutobiographicalConfig {
   l1HoldbackChunks?: number;
 
   // Legacy aliases (deprecated, use summary* instead)
-  /** @deprecated Use summarySystemPrompt */
+  /** @deprecated Ignored, as `summarySystemPrompt`, its replacement, is. */
   diarySystemPrompt?: string;
-  /** @deprecated Use summaryUserPrompt */
+  /** @deprecated Ignored, as `summaryUserPrompt`, its replacement, is. */
   diaryUserPrompt?: string;
 
   // --- Hierarchical compression (L1/L2/L3 pyramid) ---
